@@ -46,7 +46,7 @@ team_t team = {
 
 
 typedef struct header{
-    int magic_num =0xbeef;
+    int magic_num;
     struct header *next;
     struct super_header *owner;
 } header_t;
@@ -54,8 +54,10 @@ typedef struct header{
 typedef struct super_header {
     int usage;
     struct super_header *non_full_super;
+    struct super_header *next_free_4k;
     header_t *head_free;
-    int index; 
+    int index;
+    int size_class; 
 } super_header_t;
 
 typedef struct class_head{
@@ -66,6 +68,8 @@ typedef struct class_head{
 class_head_t class_head[7];
 
 int num_4k = 0;
+
+super_header_t free_4k_start = {};
 
 /* 
  * mm_init - initialize the malloc package.
@@ -109,28 +113,122 @@ void pop_header(super_header_t *super_header)
     super_header->head_free = super_header->head_free->next;
 }
 
+void insert_free_4k(super_header_t *free_4k)
+{
+    if (free_4k_start.next_free_4k == NULL)
+    {
+        free_4k_start.next_free_4k = *free_4k;
+    }
+    else
+    {
+        int next_index = free_4k_start.index;
+        super_header_t *prev = &free_4k_start;
+        super_header_t *next = free_4k_start.next_free_4k;
+
+        if (free_4k->index > next_index )
+        {
+            super_header_t *temp = &free_4k_start;
+            free_4k_start = *free_4k;
+            free_4k->next_free_4k = temp;
+        }
+        else
+        {
+            while (1)
+            {
+                if (free_4k->index < next_index)
+                {
+                    prev = prev->next_free_4k;
+                    next = next->next_free_4k;
+                    next_index = next->index;
+                }
+                else
+                {
+                prev->next_free_4k = free_4k;
+                free_4k->next_free_4k=next;
+                break;
+                }
+            }
+        }
+    }
+}
+
+void remove_free_4k(super_header_t *free_4k)
+{
+    if (&free_4k_start == free_4k)
+    {
+        free_4k_start = NULL;
+    }
+    super_header_t *prev = &free_4k_start;
+    super_header_t *next = free_4k_start.next_free_4k;    
+    while(1)
+    {
+        if (next == free_4k)
+        {
+            prev->next_free_4k = next;
+            free_4k->next_free_4k = NULL;
+        }
+    }
+}
+
+void free_4k()
+{
+    super_header_t *block = &free_4k_start;
+    while(!block && block->index == num_4k)
+    {
+        sbrk(0-sizeof(super_header_t)-4096);
+        num_4k--;
+        block = block->next_free_4k;
+    }
+}
+
 void init_4k(super_header_t *super_header,int size_class)
 {
     for (int i = 0; i < class_head[size_class].capacity; i++)
     {
         header_t *header = (header_t *)((void *)(super_header+1) + i*(sizeof(header_t)+(1<<(4+size_class))));
         push_header(super_header,header);
+        header->magic_num = = 0xbeef;
     }
 }
 
 void *alloc_4k(int size_class)
 {
     super_header_t *super_header;
-    void *p = (int *) sbrk(4096);
-    if (p == (void *)-1)
-        return NULL;
-    else{
-        super_header = p;
-        init_4k(super_header,size_class);
-        push_super_header(&class_head[size_class],super_header);
-        super_header->index = ++num_4k;
-        return super_header;
+    if (free_4k)
+    {
+        super_header = find_last_4k();
     }
+    else
+    {
+        void *p = (int *) sbrk(4096);
+        if (p == (void *)-1)
+            return NULL;
+        super_header = (super_header_t *)(p)
+    }
+    super_header = p;
+    init_4k(super_header,size_class);
+    push_super_header(&class_head[size_class],super_header);
+    super_header->index = ++num_4k;
+    super_header->size_class = size_class;
+    return super_header;
+    
+}
+
+super_header_t *find_last_4k()
+{
+    if (free_4k){
+        super_header_t *current = free_4k; 
+        while(current ->next_free_4k)
+        {
+            current = current->next_free_4k;
+        }
+        return current;
+    }
+    else
+    {
+        return NULL;
+    }
+    
 }
 
  /* 
@@ -143,9 +241,10 @@ void *mm_malloc(size_t size)
     if (size == 0)
         return NULL;
     int size_class = find_class(size);
-    if (class_head[size_class].super_start && class_head[size].super_start->usage < class_head[size].capacity) {
+    if (class_head[size_class].super_start) {
         header_t *block = class_head[size_class].super_start->head_free;
         pop_header(class_head[size_class].super_start);
+/*        if the 4k_block is full*/
         if (--class_head[size_class].super_start->usage ==0){
             pop_super_header(&class_head[size_class]);
         }
@@ -167,24 +266,33 @@ void *mm_malloc(size_t size)
 void mm_free(void *ptr)
 {
     header_t *header = ptr - sizeof(header_t);
-    if (header->magic_num == 0xbeef){
-        push_header(header->owner,header);
-        if (++header->owner->usage == header->owner->)
+    if (header->magic_num == 0xbeef)
+    {
+        super_header_t super_header = header->owner;
+        push_header(super_header,header);
+        size_class = super_header->size_class
+        --super_header->usage;
         
+/*if the 4k block is totally free*/
+        if(super_header->usage == 0)
+        {
+            pop_super_header(super_header);
+            insert_free_4k(super_header);
+            free_4k();
+        }
+/*if the 4k block was full*/
+        if (super_header->usage == class_head[size_class].capacity-1)
+        {
+            push_super_header(&class_head[size_class],super_header);
+        }
     }
+    
     else{
         printf("The input pointer is wrong!");
         exit(-1);
     }
 }
 
-/*int check_is_last_free(void)*/
-/*{*/
-/*    while (head)*/
-/*    {*/
-/*    */
-/*    }*/
-/*}*/
 
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
