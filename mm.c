@@ -104,7 +104,7 @@ void pop_super_header(class_head_t *class_head)
 
 void push_header(super_header_t *super_header,header_t *header)
 {
-    header->next = super_header -> head_free;
+    header -> next = super_header -> head_free;
     super_header -> head_free = header;
 }
 
@@ -115,48 +115,28 @@ void pop_header(super_header_t *super_header)
 
 void insert_free_4k(super_header_t *free_4k)
 {
-    if (free_4k_start.next_free_4k == NULL)
+    if (free_4k_start.next_free_4k == NULL || free_4k->index > free_4k_start.next_free_4k->index)
     {
-        free_4k_start.next_free_4k = *free_4k;
+        free_4k = free_4k_start.next_free_4k;
+        free_4k_start.next_free_4k = free_4k;
     }
     else
     {
-        int next_index = free_4k_start.index;
-        super_header_t *prev = &free_4k_start;
-        super_header_t *next = free_4k_start.next_free_4k;
-
-        if (free_4k->index > next_index )
+        super_header_t *current = free_4k_start.next_free_4k;
+        while (current ->next_free_4k != NULL || free_4k->index < current->next_free_4k->index)
         {
-            super_header_t *temp = &free_4k_start;
-            free_4k_start = *free_4k;
-            free_4k->next_free_4k = temp;
+            current = current ->next_free_4k;
         }
-        else
-        {
-            while (1)
-            {
-                if (free_4k->index < next_index)
-                {
-                    prev = prev->next_free_4k;
-                    next = next->next_free_4k;
-                    next_index = next->index;
-                }
-                else
-                {
-                prev->next_free_4k = free_4k;
-                free_4k->next_free_4k=next;
-                break;
-                }
-            }
-        }
+        free_4k->next_free_4k = current->next_free_4k;
+        current ->next_free_4k = free_4k;
     }
 }
 
 void remove_free_4k(super_header_t *free_4k)
 {
-    if (&free_4k_start == free_4k)
+    if (free_4k_start.next_free_4k == free_4k)
     {
-        free_4k_start = NULL;
+        free_4k_start.next_free_4k = NULL;
     }
     super_header_t *prev = &free_4k_start;
     super_header_t *next = free_4k_start.next_free_4k;    
@@ -173,7 +153,7 @@ void remove_free_4k(super_header_t *free_4k)
 void free_4k()
 {
     super_header_t *block = &free_4k_start;
-    while(!block && block->index == num_4k)
+    while(block && block->index == num_4k)
     {
         sbrk(0-sizeof(super_header_t)-4096);
         num_4k--;
@@ -181,44 +161,11 @@ void free_4k()
     }
 }
 
-void init_4k(super_header_t *super_header,int size_class)
-{
-    for (int i = 0; i < class_head[size_class].capacity; i++)
-    {
-        header_t *header = (header_t *)((void *)(super_header+1) + i*(sizeof(header_t)+(1<<(4+size_class))));
-        push_header(super_header,header);
-        header->magic_num = = 0xbeef;
-    }
-}
-
-void *alloc_4k(int size_class)
-{
-    super_header_t *super_header;
-    if (free_4k)
-    {
-        super_header = find_last_4k();
-    }
-    else
-    {
-        void *p = (int *) sbrk(4096);
-        if (p == (void *)-1)
-            return NULL;
-        super_header = (super_header_t *)(p)
-    }
-    super_header = p;
-    init_4k(super_header,size_class);
-    push_super_header(&class_head[size_class],super_header);
-    super_header->index = ++num_4k;
-    super_header->size_class = size_class;
-    return super_header;
-    
-}
-
 super_header_t *find_last_4k()
 {
-    if (free_4k){
-        super_header_t *current = free_4k; 
-        while(current ->next_free_4k)
+    if (free_4k_start.next_free_4k !=NULL){
+        super_header_t *current = free_4k_start.next_free_4k; 
+        while(current ->next_free_4k != NULL)
         {
             current = current->next_free_4k;
         }
@@ -228,6 +175,39 @@ super_header_t *find_last_4k()
     {
         return NULL;
     }
+    
+}
+
+void init_4k(super_header_t *super_header,int size_class)
+{
+    for (int i = 0; i < class_head[size_class].capacity; i++)
+    {
+        header_t *header = (header_t *)((void *)(super_header+1) + i*(sizeof(header_t)+(1<<(4+size_class))));
+        header -> owner = super_header;
+        push_header(super_header,header);
+        header->magic_num = 0xbeef;
+    }
+}
+
+void *alloc_4k(int size_class)
+{
+    super_header_t *super_header;
+    if (free_4k_start.next_free_4k)
+    {
+        super_header = find_last_4k();
+    }
+    else
+    {
+        void *p = (int *) sbrk(4096);
+        if (p == (void *)-1)
+            return NULL;
+        super_header = (super_header_t *)(p);
+    }
+    init_4k(super_header,size_class);
+    push_super_header(&class_head[size_class],super_header);
+    super_header->index = ++num_4k;
+    super_header->size_class = size_class;
+    return super_header;
     
 }
 
@@ -268,15 +248,16 @@ void mm_free(void *ptr)
     header_t *header = ptr - sizeof(header_t);
     if (header->magic_num == 0xbeef)
     {
-        super_header_t super_header = header->owner;
+        super_header_t *super_header = header->owner;
         push_header(super_header,header);
-        size_class = super_header->size_class
+        int size_class = super_header->size_class;
         --super_header->usage;
         
 /*if the 4k block is totally free*/
         if(super_header->usage == 0)
         {
-            pop_super_header(super_header);
+            printf("here");
+            pop_super_header(&class_head[size_class]);
             insert_free_4k(super_header);
             free_4k();
         }
@@ -317,8 +298,18 @@ void mm_free(void *ptr)
 int main()
 {
     mm_init();
-    int *p1 = mm_malloc(sizeof(int));
-    printf("p1:%p",p1);
+    void *p1 = mm_malloc(sizeof(int));
+    void *p2 = mm_malloc(sizeof(int));
+    printf("p1:%p\n",p1);
+    printf("p2:%p\n",p2);
+    printf("p2-p1:%ld\n",p1-p2-sizeof(header_t));
+    printf("heap:%p\n",sbrk(0));
+    void *p3 = mm_malloc(29);
+    printf("heap:%p\n",sbrk(0));
+    printf("p3:%p\n",p3);
+    printf("p3-p1:%ld\n",p3-p1);
+    mm_free(p3);
+    printf("heap:%p\n",sbrk(0));
 }
 
 
