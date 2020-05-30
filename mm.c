@@ -254,8 +254,6 @@ void *mm_malloc(size_t size)
         return (void *)(block +1);
     }
 }
-
-
 /*
  * mm_free - Freeing a block does nothing.
  */
