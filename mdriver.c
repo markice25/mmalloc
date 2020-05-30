@@ -388,12 +388,12 @@ static int add_range(range_t **ranges, char *lo, int size,
     assert(size > 0);
 
     /* Payload addresses must be ALIGNMENT-byte aligned */
-    if (!IS_ALIGNED(lo)) {
-	sprintf(msg, "Payload address (%p) not aligned to %d bytes", 
-		lo, ALIGNMENT);
-        malloc_error(tracenum, opnum, msg);
-        return 0;
-    }
+/*    if (!IS_ALIGNED(lo)) {*/
+/*	sprintf(msg, "Payload address (%p) not aligned to %d bytes", */
+/*		lo, ALIGNMENT);*/
+/*        malloc_error(tracenum, opnum, msg);*/
+/*        return 0;*/
+/*    }*/
 
     /* The payload must lie within the extent of the heap */
     if ((lo < (char *)mem_heap_lo()) || (lo > (char *)mem_heap_hi()) || 

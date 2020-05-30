@@ -12,7 +12,7 @@
  * This is the default path where the driver will look for the
  * default tracefiles. You can override it at runtime with the -t flag.
  */
-#define TRACEDIR "/u/cs252/labs20/malloclab/malloctraces/"
+#define TRACEDIR "/home/zhijie/mmalloc/malloctraces/"
 
 /*
  * This is the list of default tracefiles in TRACEDIR that the driver
