@@ -52,13 +52,14 @@ typedef struct header{
 } header_t;
 
 typedef struct super_header {
-    int usage;
     struct super_header *non_full_super;
     struct super_header *next_free_4k;
     header_t *head_free;
+    int usage;
     int index;
-    int size_class; 
-} super_header_t;
+    int size_class;
+    int pad;
+} __attribute__ ((packed, aligned(8))) super_header_t;
 
 typedef struct class_head{
     int capacity;
@@ -163,7 +164,7 @@ void free_4k()
     super_header_t *block = &free_4k_start;
     while(block && block->index == num_4k)
     {
-        sbrk(0-sizeof(super_header_t)-4096*32);
+        mem_brk -= sizeof(super_header_t)+4096*32;
         num_4k--;
         block = block->next_free_4k;
     }
@@ -185,6 +186,8 @@ super_header_t *find_last_4k()
     }
     
 }
+
+
 
 void init_4k(super_header_t *super_header,int size_class)
 {
