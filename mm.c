@@ -44,31 +44,34 @@ team_t team = {
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
+#define PAGES 8
 
-typedef struct header{
-    int magic_num;
+typedef struct header {
     struct header *next;
     struct super_header *owner;
-} header_t;
+    int magic_num;
+    int pad;
+} __attribute__ ((packed, aligned(8))) header_t;
 
 typedef struct super_header {
     struct super_header *non_full_super;
     struct super_header *next_free_4k;
     header_t *head_free;
-    int usage;
+    int free_count;
     int index;
     int size_class;
     int pad;
 } __attribute__ ((packed, aligned(8))) super_header_t;
 
-typedef struct class_head{
+typedef struct class_head {
     int capacity;
     super_header_t *super_start;
 } class_head_t;
 
 class_head_t class_head[15];
 
-int num_4k = 0;
+static int num_4k = 0;
+static int allocated_4k = 0;
 
 super_header_t free_4k_start = {};
 
@@ -77,37 +80,86 @@ super_header_t free_4k_start = {};
  */
 int mm_init(void)
 {
-    for(int i=0 ; i<=14; i++)
-    {
-        class_head[i].capacity = (4096*32 -sizeof(super_header_t))/(sizeof(header_t)+(1<<(i+4)));
-/*        printf("size%i:%i\n",sizeof(header_t)+(1<<(i+4)),class_head[i].capacity );*/
+    for (int i=0 ; i <= 14; i++) {
+        class_head[i].capacity = (4096 * PAGES -sizeof(super_header_t)) / (sizeof(header_t) + (1 << (i + 4)));
+        printf("size%i:%i\n",(1<<(i+4)),class_head[i].capacity );
     }
     return 0;
 }
 
- int find_class(size_t size)
+void print_class_head()
+{
+    for (int j = 0; j< 15; j++){
+        printf("class head: %i: %p\n",j,class_head[j].super_start);
+    }
+
+}
+
+static inline int find_class(size_t size)
 {
     int size_class = __builtin_clzl(size) + __builtin_ctzl(size)+1 == sizeof(size)*8 ? __builtin_ctzl(size) :  sizeof(size)*8 - __builtin_clzl(size);
     if (size_class < 4)
         return 0;
-    return size_class-4;
+    return size_class - 4;
 }
 
 void push_super_header(class_head_t *class_head,super_header_t *super_header)
 {
+    printf("push_super_header @ %p\n", super_header);
     super_header->non_full_super = class_head->super_start;
     class_head->super_start = super_header;
 }
 
 void pop_super_header(class_head_t *class_head)
 {
+    super_header_t *temp = class_head->super_start;
     class_head->super_start = class_head->super_start->non_full_super;
+    temp->non_full_super = NULL;
+}
+
+void remove_super_header(class_head_t *class_head, super_header_t *super_header)
+{
+    printf("remove super_header @ %p\n", super_header);
+    super_header_t *prev = NULL;
+    super_header_t *cur = class_head->super_start;
+    for (; cur && cur != super_header; prev = cur, cur = cur->non_full_super);
+    
+    if (cur == super_header) {
+        if (prev) {
+            prev->non_full_super = cur->non_full_super;
+        } else {
+            class_head->super_start = cur->non_full_super;
+        }
+    } else {
+        printf("unable to find super_header @ %p\n", super_header);
+    }
+    
+    cur->non_full_super = NULL;
+    
+    
+    
+    
+    
+/*    super_header_t *current = class_head->super_start;*/
+/*    if (current == super_header){*/
+/*        class_head->super_start = class_head->super_start->non_full_super;*/
+/*        super_header->non_full_super = NULL;*/
+/*    }*/
+/*    else{*/
+/*            while(current->non_full_super != super_header)*/
+/*            {*/
+/*                current = current->non_full_super;*/
+/*            }*/
+/*            current->non_full_super = super_header->non_full_super;*/
+/*            super_header->non_full_super = NULL;*/
+/*        }*/
 }
 
 void push_header(super_header_t *super_header,header_t *header)
 {
-    header -> next = super_header -> head_free;
-    super_header -> head_free = header;
+    header->next = super_header->head_free;
+    super_header->head_free = header;
+    super_header->free_count++;
 }
 
 void pop_header(super_header_t *super_header)
@@ -115,14 +167,21 @@ void pop_header(super_header_t *super_header)
 /*    printf("pop_header\n");*/
 /*    printf("head_free: %p\n",super_header->head_free);*/
     
-    if ((super_header->head_free = super_header->head_free->next) == NULL){
+    printf("pop header from %p\n", super_header);
+    
+    super_header->free_count--;
+    header_t *temp = super_header->head_free;
+    super_header->head_free = super_header->head_free->next;
+    temp->next = NULL;
+    if (super_header->free_count == 0){
         int size_class = super_header->size_class;
-        pop_super_header(&class_head[size_class]);
-        }
+        remove_super_header(&class_head[size_class],super_header);
+    }
 }
 
 void insert_free_4k(super_header_t *free_4k)
 {
+    allocated_4k--;
     if (free_4k_start.next_free_4k == NULL || free_4k->index > free_4k_start.next_free_4k->index)
     {
         free_4k = free_4k_start.next_free_4k;
@@ -142,6 +201,7 @@ void insert_free_4k(super_header_t *free_4k)
 
 void remove_free_4k(super_header_t *free_4k)
 {
+    allocated_4k++;
     if (free_4k_start.next_free_4k == free_4k)
     {
         free_4k_start.next_free_4k = NULL;
@@ -160,14 +220,23 @@ void remove_free_4k(super_header_t *free_4k)
 
 void free_4k()
 {
-/*    printf("free_4k\n");*/
-    super_header_t *block = &free_4k_start;
-    while(block && block->index == num_4k)
-    {
-        mem_brk -= sizeof(super_header_t)+4096*32;
-        num_4k--;
-        block = block->next_free_4k;
+    if (!allocated_4k) {
+        super_header_t *current = &free_4k_start;;
+        super_header_t *temp;
+        while(current->next_free_4k)
+        {
+            temp = current->next_free_4k;
+            current->next_free_4k = NULL;
+            current = temp;
+        }
+        printf("free 4k\n");
     }
+    
+    
+    
+    
+/*    printf("free_4k\n");*/
+
 }
 
 super_header_t *find_last_4k()
@@ -196,7 +265,7 @@ void init_4k(super_header_t *super_header,int size_class)
     for (int i = 0; i < class_head[size_class].capacity; i++)
     {
         header_t *header = (header_t *)((void *)(super_header+1) + i*(sizeof(header_t)+(1<<(4+size_class))));
-        header -> owner = super_header;
+        header->owner = super_header;
         push_header(super_header,header);
         header->magic_num = 0xbeef;
     }
@@ -205,28 +274,23 @@ void init_4k(super_header_t *super_header,int size_class)
 void *alloc_4k(int size_class)
 {
     super_header_t *super_header;
-    if (free_4k_start.next_free_4k)
-    {
-/*        printf("*used \n");*/
+    if (free_4k_start.next_free_4k) {
+        printf("*used \n");
         super_header = find_last_4k();
-    }
-    else
-    {
-/*        printf("allocate new 4k\n");*/
-        void *p = mem_sbrk(4096 * 32);
-        if (p == (void *)-1)
-        {
-
+    } else {
+        printf("allocate new 4k\n");
+        void *p = mem_sbrk(4096 * PAGES);
+        if (p == (void *)-1) {
             return NULL;
         }/*            printf("full\n");*/
         super_header = (super_header_t *)(p);
     }
-    init_4k(super_header,size_class);
+    init_4k(super_header, size_class);
     push_super_header(&class_head[size_class],super_header);
     super_header->index = ++num_4k;
     super_header->size_class = size_class;
+    allocated_4k++;
     return super_header;
-    
 }
 
  /* 
@@ -237,60 +301,85 @@ void *alloc_4k(int size_class)
 void *mm_malloc(size_t size)
 {
 /*    printf("***malloc size:%i\n",size);*/
-    if (size == 0)
+    if (!size)
         return NULL;
+    
     int size_class = find_class(size);
-/*    printf("sizeclass:%i\n",size_class);*/
-    if (class_head[size_class].super_start != NULL) {
-/*        printf("**Suse existed\n");*/
-        header_t *block = class_head[size_class].super_start->head_free;
-        pop_header(class_head[size_class].super_start);
-        return (void *)(block +1);
-        }
-        
-    else{
-/*        printf("**use new\n");*/
+    printf("**allocate size:%i\n",size_class);
+    printf("class head:%p\n",class_head[size_class].super_start);
+    if (!class_head[size_class].super_start) {
         alloc_4k(size_class);
-/*        printf("head_ free: %p\n",class_head[size_class].super_start->head_free);*/
-        header_t *block = class_head[size_class].super_start->head_free;
-        pop_header(class_head[size_class].super_start);
-        return (void *)(block +1);
     }
+    
+    header_t *block = class_head[size_class].super_start->head_free;
+    pop_header(class_head[size_class].super_start);
+    printf("4k in use:%i\n",allocated_4k);
+    return (void *)(block + 1);
+    
+/*/*    printf("sizeclass:%i\n",size_class);*/
+/*    if (class_head[size_class].super_start) {*/
+/*/*        printf("**Suse existed\n");*/
+/*        header_t *block = class_head[size_class].super_start->head_free;*/
+/*        pop_header(class_head[size_class].super_start);*/
+/*        return (void *)(block +1);*/
+/*    }*/
+/*        */
+/*    else{*/
+/*/*        printf("**use new\n");*/
+/*        alloc_4k(size_class);*/
+/*/*        printf("head_ free: %p\n",class_head[size_class].super_start->head_free);*/
+/*        header_t *block = class_head[size_class].super_start->head_free;*/
+/*        pop_header(class_head[size_class].super_start);*/
+/*        return (void *)(block +1);*/
+/*    }*/
 }
+
+
 /*
  * mm_free - Freeing a block does nothing.
  */
- 
 void mm_free(void *ptr)
 {
     header_t *header = ptr - sizeof(header_t);
-    if (header->magic_num == 0xbeef)
-    {
+    if (header->magic_num == 0xbeef) {
         super_header_t *super_header = header->owner;
-        push_header(super_header,header);
+        push_header(super_header, header);
         int size_class = super_header->size_class;
-        --super_header->usage;
-/*        printf("usage:%i",super_header->usage);*/
+        printf("**free size:%i\n",size_class);
+        //--super_header->usage;
+        //printf("usage: %i\n",super_header->usage);
         
-/*if the 4k block is totally free*/
-        if(super_header->usage == 0)
-        {
-/*            printf("here");*/
-            pop_super_header(&class_head[size_class]);
+/*becomes empty*/
+/*was nonfull*/
+
+        if (super_header->free_count == class_head[size_class].capacity){
+            /*was nonfull*/
+            if (class_head[size_class].capacity != 1) {
+                remove_super_header(&class_head[size_class],super_header);
+            }
             insert_free_4k(super_header);
             free_4k();
         }
-/*if the 4k block was full*/
-        if (super_header->usage == class_head[size_class].capacity-1)
-        {
-            push_super_header(&class_head[size_class],super_header);
+        else {
+            if (super_header->free_count == 1 ){
+                push_super_header(&class_head[size_class],super_header);
+            }
         }
+
+/*if the 4k block was full*/
+/*        else if (super_header->free_count == 1 && class_head[size_class].capacity != 1)*/
+/*        {*/
+/*            push_super_header(&class_head[size_class],super_header);*/
+/*        }*/
+        
     }
     
-    else{
+    else {
 /*        printf("The input pointer is wrong!");*/
         exit(-1);
     }
+    
+    printf("4k in use:%i\n",allocated_4k);
 }
 
 
